@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>فرز الصور</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Readex+Pro:wght@500;600;700&display=swap">
+<style>
+/* Layout: phone-first single column. Tabs on top, a swipe card stack in the middle, action row and album chips below. Albums carry a type (photo or video) and only matching albums show for the current item. */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --fg:#14202b; --muted:#5d6b78; --line:#d9dfe5;
+  --accent:#1f6f8b; --accent-fg:#ffffff; --keep:#1f8a5b; --trash:#d2473b; --chip:#e3e9ee;
+  --vid:#7a4fc2; --vid-bg:#ece4f8;
+  --shadow:0 10px 30px rgba(20,32,43,.14);
+  --f-display:'Readex Pro','IBM Plex Sans Arabic',system-ui,sans-serif;
+  --f-body:'IBM Plex Sans Arabic',system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10181f; --surface:#1a252e; --fg:#e8eef3; --muted:#92a1ae; --line:#2b3945;
+  --accent:#5db7d6; --accent-fg:#08202a; --keep:#46c58a; --trash:#ff7a6e; --chip:#243340;
+  --vid:#b89cf0; --vid-bg:#2d2542;
+  --shadow:0 10px 30px rgba(0,0,0,.45); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10181f; --surface:#1a252e; --fg:#e8eef3; --muted:#92a1ae; --line:#2b3945;
+  --accent:#5db7d6; --accent-fg:#08202a; --keep:#46c58a; --trash:#ff7a6e; --chip:#243340;
+  --vid:#b89cf0; --vid-bg:#2d2542;
+  --shadow:0 10px 30px rgba(0,0,0,.45); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.5;
+  padding-block:12px 28px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+#app{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+button:focus-visible,input:focus-visible,select:focus-visible,label:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+h1{font-family:var(--f-display);font-size:1.35rem;margin:0;font-weight:700;letter-spacing:-.01em}
+.btn{background:var(--accent);color:var(--accent-fg);padding:9px 14px;border-radius:10px;font-weight:600;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.btn.ghost{background:var(--chip);color:var(--fg)}
+.tabs,.seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--chip);border-radius:12px;padding:4px;gap:4px}
+.tab,.sg{padding:8px 4px;border-radius:9px;font-weight:500;color:var(--muted);font-size:.92rem}
+.tab[aria-selected="true"],.sg[aria-pressed="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.tab .n{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.8rem;margin-inline-start:3px}
+.stack{position:relative;width:100%;aspect-ratio:3/4;max-height:62vh;margin:0 auto}
+.card{position:absolute;inset:0;border-radius:20px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow);
+  transition:transform .25s ease,opacity .25s ease;user-select:none;-webkit-user-select:none}
+.card img,.card video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;background:#000}
+.card.top{touch-action:none;cursor:grab;z-index:3}
+.card.top.drag{transition:none;cursor:grabbing}
+.card.next{transform:scale(.95) translateY(10px);z-index:2;opacity:.9}
+.card.third{transform:scale(.9) translateY(20px);z-index:1;opacity:.7}
+.stamp{position:absolute;top:18px;padding:4px 12px;border:3px solid;border-radius:10px;font-family:var(--f-display);font-weight:700;font-size:1.3rem;opacity:0;background:rgba(255,255,255,.85)}
+.stamp.k{left:18px;color:#1f8a5b;border-color:#1f8a5b;transform:rotate(-10deg)}
+.stamp.d{left:50%;top:18px;color:#d2473b;border-color:#d2473b;transform:translateX(-50%) rotate(-4deg)}
+.badge{position:absolute;bottom:10px;inset-inline-start:10px;background:rgba(0,0,0,.55);color:#fff;font-size:.75rem;padding:2px 9px;border-radius:20px}
+.tbadge{position:absolute;bottom:10px;inset-inline-end:10px;background:rgba(122,79,194,.92);color:#fff;font-size:.75rem;padding:2px 10px;border-radius:20px;font-weight:600}
+.play{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.play i{width:54px;height:54px;border-radius:50%;background:rgba(0,0,0,.5);display:grid;place-items:center}
+.play i::after{content:"";border-inline-start:16px solid #fff;border-block:10px solid transparent;margin-inline-start:-3px;transform:scaleX(-1)}
+.th .play i,.cov .play i{width:30px;height:30px}
+.th .play i::after,.cov .play i::after{border-inline-start-width:10px;border-block-width:6px}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;padding:36px 20px;background:var(--surface);border:1px dashed var(--line);border-radius:20px;min-height:260px}
+.empty p{margin:0;color:var(--muted);max-width:30ch}
+.empty strong{font-family:var(--f-display);font-size:1.15rem}
+.row{display:flex;justify-content:center;align-items:center;gap:18px}
+.round{width:56px;height:56px;border-radius:50%;background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center}
+.round.big{width:66px;height:66px}
+.round svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.round.k{color:var(--keep)} .round.d{color:var(--trash)} .round.u{width:46px;height:46px;color:var(--muted)}
+.round:disabled{opacity:.35;cursor:default}
+.progress{text-align:center;color:var(--muted);font-size:.85rem;font-variant-numeric:tabular-nums}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;align-items:center}
+.chip{flex:none;background:var(--chip);padding:8px 14px;border-radius:20px;font-weight:500;white-space:nowrap}
+.chip.v{background:var(--vid-bg);color:var(--vid)}
+.chip.add{background:transparent;border:1px dashed var(--line)}
+.lbl{font-size:.8rem;color:var(--muted);letter-spacing:.02em;margin:0}
+.newalbum{display:flex;gap:8px}
+.newalbum input,.newalbum select{min-width:0;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg);font:inherit}
+.newalbum input{flex:1}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:12px}
+.album{background:var(--surface);border-radius:14px;overflow:hidden;text-align:start;box-shadow:0 1px 3px rgba(0,0,0,.1);display:flex;flex-direction:column}
+.album .cov{position:relative;aspect-ratio:1;background:var(--chip);display:grid;place-items:center;color:var(--muted);overflow:hidden}
+.album .cov img,.album .cov video{width:100%;height:100%;object-fit:cover}
+.album .meta{padding:8px 10px;display:flex;justify-content:space-between;gap:6px;align-items:center}
+.album .meta b{font-weight:600;overflow-wrap:anywhere}
+.album .meta span{color:var(--muted);font-variant-numeric:tabular-nums}
+.tag{font-size:.7rem;padding:1px 8px;border-radius:20px;background:var(--chip);color:var(--muted);font-weight:500;margin-inline-start:6px}
+.tag.v{background:var(--vid-bg);color:var(--vid)}
+.thumbs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
+.th{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--chip)}
+.th img,.th video{width:100%;height:100%;object-fit:cover;display:block}
+.th button{position:absolute;bottom:4px;inset-inline-end:4px;background:rgba(0,0,0,.6);color:#fff;border-radius:8px;font-size:.72rem;padding:2px 8px;z-index:2}
+.sub{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sub h2{font-family:var(--f-display);font-size:1.05rem;margin:0}
+.note{font-size:.8rem;color:var(--muted);margin:0}
+@media (prefers-reduced-motion:reduce){.card{transition:none}}
+</style>
+
+<style>
+:root{color-scheme:light dark;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0}
+</style>
+</head>
+<body>
+<div id="app" dir="rtl" lang="ar">
+  <header>
+    <h1>فرز الصور</h1>
+    <label class="btn" id="uploadLbl" tabindex="0">إضافة صور وفيديو<input id="file" type="file" accept="image/*,video/*" multiple hidden></label>
+  </header>
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <main id="view"></main>
+</div>
+
+<script>
+(function(){
+  var TL={photo:'صور',video:'فيديو'};
+  var aseq=10,seq=0;
+  var S={photos:[],
+    albums:[{id:1,name:'المفضلة',type:'photo'},{id:2,name:'سفر',type:'photo'},{id:3,name:'عائلة',type:'photo'},
+            {id:4,name:'لقطات مميزة',type:'video'},{id:5,name:'ذكريات',type:'video'}],
+    history:[],view:'sort',open:null,adding:false,filter:'all'};
+  var $=function(id){return document.getElementById(id)};
+  function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+  function pending(){return S.photos.filter(function(p){return p.status==='pending'})}
+  function kept(){return S.photos.filter(function(p){return p.status==='kept'})}
+  function trash(){return S.photos.filter(function(p){return p.status==='trash'})}
+  function albumById(id){return S.albums.filter(function(a){return a.id===id})[0]}
+
+  /* sample items drawn on canvas; every 5th is a sample "video" so both flows can be tried */
+  function sample(i){
+    var c=document.createElement('canvas');c.width=600;c.height=800;var x=c.getContext('2d');
+    var hues=[200,18,150,265,40,330,185,95,12,230,55,300];var h=hues[i%hues.length];
+    var g=x.createLinearGradient(0,0,0,800);g.addColorStop(0,'hsl('+h+',70%,72%)');g.addColorStop(1,'hsl('+(h+40)+',65%,38%)');
+    x.fillStyle=g;x.fillRect(0,0,600,800);
+    x.fillStyle='rgba(255,255,255,.85)';x.beginPath();x.arc(150+(i*53)%300,170+(i*37)%120,56,0,7);x.fill();
+    for(var k=0;k<3;k++){x.fillStyle='hsla('+(h+20*k)+',45%,'+(30-k*7)+'%,.9)';x.beginPath();x.moveTo(0,800);
+      var base=520+k*70;x.lineTo(0,base);
+      for(var px=0;px<=600;px+=100){x.lineTo(px,base-40-((px*(k+2)+i*61)%90))}
+      x.lineTo(600,800);x.closePath();x.fill()}
+    return c.toDataURL('image/jpeg',.8)
+  }
+  function addSamples(){
+    for(var i=0;i<12;i++){S.photos.push({id:++seq,src:sample(i),status:'pending',album:null,sample:true,type:(i%5===4?'video':'photo')})}
+    render()
+  }
+  $('file').addEventListener('change',function(e){
+    var fs=Array.prototype.slice.call(e.target.files||[]);
+    fs.forEach(function(f){if(!/^(image|video)\//.test(f.type))return;
+      S.photos.push({id:++seq,src:URL.createObjectURL(f),status:'pending',album:null,type:/^video\//.test(f.type)?'video':'photo'})});
+    e.target.value='';S.view='sort';render()
+  });
+  $('uploadLbl').addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();$('file').click()}});
+
+  /* media element for a card or thumbnail */
+  function media(p,live){
+    var isVid=p.type==='video';
+    if(isVid&&!p.sample){
+      return '<video src="'+p.src+'#t=0.1" muted loop playsinline preload="metadata"'+(live?' autoplay':'')+'></video>'+(live?'':'<span class="play"><i></i></span>')
+    }
+    return '<img alt="'+(isVid?'فيديو':'صورة')+'" src="'+p.src+'" draggable="false">'+(isVid?'<span class="play"><i></i></span>':'')
+  }
+
+  function act(type,albumId){
+    var p=pending()[0];if(!p)return;
+    S.history.push({id:p.id,status:p.status,album:p.album});
+    if(type==='trash'){p.status='trash';p.album=null}
+    else{p.status='kept';p.album=albumId||null}
+    render()
+  }
+  function undo(){
+    var h=S.history.pop();if(!h)return;
+    var p=S.photos.filter(function(q){return q.id===h.id})[0];
+    if(p){p.status=h.status;p.album=h.album;
+      var i=S.photos.indexOf(p);S.photos.splice(i,1);
+      var first=S.photos.findIndex(function(q){return q.status==='pending'});
+      S.photos.splice(first<0?S.photos.length:first,0,p)}
+    render()
+  }
+
+  var icons={
+    x:'<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    ok:'<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    undo:'<svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5"/><path d="M4 12h10a6 6 0 010 12" transform="translate(0 -5)"/></svg>'
+  };
+
+  function tabs(){
+    var t=[['sort','فرز',pending().length],['albums','الألبومات',kept().length],['trash','المحذوفات',trash().length]];
+    $('tabs').innerHTML=t.map(function(a){
+      return '<button class="tab" role="tab" data-v="'+a[0]+'" aria-selected="'+(S.view===a[0])+'">'+a[1]+'<span class="n">'+a[2]+'</span></button>'}).join('');
+    Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){S.view=b.dataset.v;S.open=null;render()}})
+  }
+
+  function viewSort(){
+    var q=pending();var v=$('view');
+    if(!q.length){
+      var none=S.photos.length===0;
+      v.innerHTML='<div class="empty"><strong>'+(none?'ابدأ بإضافة صورك':'خلصت كل الملفات')+'</strong><p>'+
+        (none?'اختر صوراً أو فيديوهات من جهازك ثم اسحبها يميناً للاحتفاظ أو للأعلى للحذف.':'المحفوظات في تبويب الألبومات، والمحذوفات في تبويب المحذوفات.')+'</p>'+
+        (none?'<button class="btn" id="demo">جرّب بصور تجريبية</button>':'<button class="btn ghost" id="undoBtn">تراجع عن آخر إجراء</button>')+'</div>';
+      var d=$('demo');if(d)d.onclick=addSamples;
+      var u=$('undoBtn');if(u){u.onclick=undo;u.disabled=!S.history.length}
+      return
+    }
+    var cur=q[0].type;
+    var albs=S.albums.filter(function(a){return a.type===cur});
+    var cards=q.slice(0,3).map(function(p,i){
+      var cls=i===0?'top':(i===1?'next':'third');
+      return '<div class="card '+cls+'" data-id="'+p.id+'">'+media(p,i===0)+
+        (i===0?'<span class="stamp k">احتفظ</span><span class="stamp d">احذف</span>':'')+
+        (p.sample&&i===0?'<span class="badge">'+(p.type==='video'?'فيديو تجريبي':'صورة تجريبية')+'</span>':'')+
+        (p.type==='video'&&i===0?'<span class="tbadge">فيديو</span>':'')+'</div>'}).reverse().join('');
+    var total=S.photos.length,done=total-q.length;
+    v.innerHTML='<div class="stack" id="stack">'+cards+'</div>'+
+      '<div class="progress" style="margin-top:10px">'+done+' من '+total+' تم فرزها</div>'+
+      '<div class="row" style="margin-top:6px">'+
+        '<button class="round d big" id="bd" aria-label="حذف">'+icons.x+'</button>'+
+        '<button class="round u" id="bu" aria-label="تراجع" '+(S.history.length?'':'disabled')+'>'+icons.undo+'</button>'+
+        '<button class="round k big" id="bk" aria-label="احتفاظ">'+icons.ok+'</button>'+
+      '</div>'+
+      '<p class="lbl" style="margin-top:14px">'+(cur==='video'?'هذا فيديو، فتظهر ألبومات الفيديو فقط':'هذه صورة، فتظهر ألبومات الصور فقط')+'</p>'+
+      '<div class="chips" id="chips">'+albs.map(function(a){return '<button class="chip'+(cur==='video'?' v':'')+'" data-id="'+a.id+'">'+esc(a.name)+'</button>'}).join('')+
+        (albs.length?'':'<span class="note">لا توجد ألبومات '+TL[cur]+' بعد.</span>')+
+        '<button class="chip add" id="addAlb">+ ألبوم جديد</button></div>'+
+      (S.adding?'<form class="newalbum" id="nf"><input id="nn" maxlength="30" placeholder="اسم الألبوم" autocomplete="off">'+
+        '<select id="nt" aria-label="نوع الألبوم"><option value="photo"'+(cur==='photo'?' selected':'')+'>صور</option><option value="video"'+(cur==='video'?' selected':'')+'>فيديو</option></select>'+
+        '<button class="btn" type="submit">إضافة</button></form>':'')+
+      '<p class="note" style="margin-top:10px;text-align:center">يمين = احتفاظ، فوق = حذف. الأسهم في لوحة المفاتيح تعمل أيضاً.</p>';
+    $('bd').onclick=function(){fling(-1)};$('bk').onclick=function(){fling(1)};$('bu').onclick=undo;
+    Array.prototype.forEach.call(document.querySelectorAll('.chip[data-id]'),function(b){b.onclick=function(){act('keep',+b.dataset.id)}});
+    $('addAlb').onclick=function(){S.adding=!S.adding;render();var n=$('nn');if(n)n.focus()};
+    var nf=$('nf');if(nf)nf.onsubmit=function(e){e.preventDefault();var n=$('nn').value.trim();var t=$('nt').value;
+      if(n&&!S.albums.some(function(a){return a.name===n&&a.type===t}))S.albums.push({id:++aseq,name:n,type:t});
+      S.adding=false;render()};
+    bindDrag()
+  }
+
+  function reduce(){return window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches}
+  function fling(dir){
+    var c=document.querySelector('.card.top');if(!c){return}
+    c.classList.remove('drag');
+    c.style.transform=dir>0?'translateX(600px) rotate(24deg)':'translateY(-900px)';c.style.opacity='0';
+    setTimeout(function(){act(dir>0?'keep':'trash')},reduce()?0:220)
+  }
+
+  function bindDrag(){
+    var c=document.querySelector('.card.top');if(!c)return;
+    var sx=0,sy=0,dx=0,dy=0,on=false;
+    var k=c.querySelector('.stamp.k'),d=c.querySelector('.stamp.d');
+    c.addEventListener('pointerdown',function(e){on=true;sx=e.clientX;sy=e.clientY;dx=0;dy=0;c.classList.add('drag');c.setPointerCapture(e.pointerId)});
+    c.addEventListener('pointermove',function(e){if(!on)return;dx=e.clientX-sx;dy=e.clientY-sy;
+      var rot=dx>0?dx/18:0;
+      c.style.transform='translate('+dx+'px,'+dy+'px) rotate('+rot+'deg)';
+      var up=dy<0&&-dy>Math.abs(dx);
+      k.style.opacity=(!up&&dx>0)?Math.min(dx/110,1):0;d.style.opacity=up?Math.min(-dy/110,1):0});
+    function end(){if(!on)return;on=false;
+      if(dy<-110&&-dy>Math.abs(dx)){fling(-1)}
+      else if(dx>110){fling(1)}
+      else{c.classList.remove('drag');c.style.transform='';k.style.opacity=0;d.style.opacity=0}}
+    c.addEventListener('pointerup',end);c.addEventListener('pointercancel',end)
+  }
+
+  function thumbsHtml(list,mode){
+    if(!list.length)return '<div class="empty" style="min-height:160px;margin-top:12px"><p>لا يوجد شيء هنا بعد.</p></div>';
+    return '<div class="thumbs">'+list.map(function(p){
+      return '<div class="th">'+media(p,false)+
+        (mode==='trash'?'<button data-r="'+p.id+'">استعادة</button>':'<button data-t="'+p.id+'">حذف</button>')+'</div>'}).join('')+'</div>'
+  }
+  function bindThumbs(){
+    Array.prototype.forEach.call(document.querySelectorAll('[data-r]'),function(b){b.onclick=function(){
+      var p=S.photos.filter(function(q){return q.id==b.dataset.r})[0];if(p){p.status='pending'}render()}});
+    Array.prototype.forEach.call(document.querySelectorAll('[data-t]'),function(b){b.onclick=function(){
+      var p=S.photos.filter(function(q){return q.id==b.dataset.t})[0];if(p){p.status='trash';p.album=null}render()}})
+  }
+
+  function viewAlbums(){
+    var v=$('view'),K=kept();
+    var fil=function(x){return S.filter==='all'||x.type===S.filter};
+    if(S.open!==null){
+      var alb=S.open==='__all'?null:albumById(S.open);
+      var list=alb?K.filter(function(p){return p.album===alb.id}):K.filter(fil);
+      v.innerHTML='<div class="sub"><button class="btn ghost" id="back">رجوع</button><h2>'+(alb?esc(alb.name)+'<span class="tag'+(alb.type==='video'?' v':'')+'">'+TL[alb.type]+'</span>':'كل المحفوظات')+'</h2></div>'+thumbsHtml(list,'album');
+      $('back').onclick=function(){S.open=null;render()};bindThumbs();return
+    }
+    function cover(l){return l[0]?media(l[0],false):'فارغ'}
+    var all=K.filter(fil);
+    var cards='<button class="album" data-k="__all"><div class="cov">'+cover(all)+'</div><div class="meta"><b>كل المحفوظات</b><span>'+all.length+'</span></div></button>'+
+      S.albums.filter(fil).map(function(a){
+        var l=K.filter(function(p){return p.album===a.id});
+        return '<button class="album" data-k="'+a.id+'"><div class="cov">'+cover(l)+'</div><div class="meta"><b>'+esc(a.name)+'<span class="tag'+(a.type==='video'?' v':'')+'">'+TL[a.type]+'</span></b><span>'+l.length+'</span></div></button>'}).join('');
+    v.innerHTML='<div class="seg" id="seg">'+[['all','الكل'],['photo','صور'],['video','فيديو']].map(function(f){
+        return '<button class="sg" data-f="'+f[0]+'" aria-pressed="'+(S.filter===f[0])+'">'+f[1]+'</button>'}).join('')+'</div>'+
+      '<div class="grid">'+cards+'</div>';
+    Array.prototype.forEach.call(v.querySelectorAll('.sg'),function(b){b.onclick=function(){S.filter=b.dataset.f;render()}});
+    Array.prototype.forEach.call(v.querySelectorAll('.album'),function(b){b.onclick=function(){S.open=b.dataset.k==='__all'?'__all':+b.dataset.k;render()}})
+  }
+
+  function viewTrash(){
+    var v=$('view'),T=trash();
+    v.innerHTML='<div class="sub"><h2>المحذوفات</h2>'+(T.length?'<button class="btn ghost" id="empty">إفراغ نهائي</button>':'')+'</div>'+thumbsHtml(T,'trash')+
+      '<p class="note" style="margin-top:12px;text-align:center">العناصر هنا لم تُحذف بعد. اضغط استعادة لإرجاعها إلى الفرز.</p>';
+    var e=$('empty');if(e)e.onclick=function(){S.photos=S.photos.filter(function(p){return p.status!=='trash'});S.history=[];render()};
+    bindThumbs()
+  }
+
+  function render(){tabs();({sort:viewSort,albums:viewAlbums,trash:viewTrash})[S.view]()}
+
+  document.addEventListener('keydown',function(e){
+    if(S.view!=='sort'||/INPUT|TEXTAREA|SELECT/.test((e.target||{}).tagName||''))return;
+    if(e.key==='ArrowRight')fling(1);else if(e.key==='ArrowUp'){e.preventDefault();fling(-1)}
+    else if(e.key==='z'||e.key==='Z')undo()
+  });
+  /* open with sample items so the first screen shows the swipe stack */
+  addSamples();
+})();
+</script>
+</body>
+</html>
