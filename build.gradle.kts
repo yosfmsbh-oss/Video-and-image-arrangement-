@@ -12,8 +12,8 @@ android {
         applicationId = "com.yousef.farz2"
         minSdk = 30
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     // One fixed key, so a new build installs over the old one and keeps your sorting.
