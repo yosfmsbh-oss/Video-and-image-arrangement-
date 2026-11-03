@@ -746,12 +746,13 @@ fun SortContent(state: AppState) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // Photos show only photo albums, videos only video albums, always in the same order.
                 state.albums.filter {
                     it.isVideo == cur.isVideo && (it.path == null || canMoveTo(it.path, cur.isVideo))
                 }.forEach { a ->
                     AssistChip(
                         onClick = { state.keep(cur, a.id) },
-                        label = { Text(if (a.path != null) "📁 ${a.name}" else a.name) }
+                        label = { Text("📁 ${a.name}") }
                     )
                 }
                 AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
