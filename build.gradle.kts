@@ -9,20 +9,20 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.yousef.farz"
+        applicationId = "com.yousef.farz2"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // One fixed key, so a new build installs over the old one and keeps your sorting.
     signingConfigs {
         getByName("debug") {
             storeFile = file("farz.keystore")
-            storePassword = "farz1234"
-            keyAlias = "farz"
-            keyPassword = "farz1234"
+            storePassword = "farz5678"
+            keyAlias = "farz2"
+            keyPassword = "farz5678"
         }
     }
 
