@@ -302,6 +302,28 @@ class AppState(private val ctx: Context) {
         }
     }
 
+    /** Kept items whose album is a phone folder they are not in yet: item and target path. */
+    val pendingMoves by derivedStateOf {
+        all.mapNotNull { m ->
+            val albumId = kept[m.id] ?: return@mapNotNull null
+            val target = albums.firstOrNull { it.id == albumId }?.path ?: return@mapNotNull null
+            if (m.path != target) m to target else null
+        }
+    }
+
+    suspend fun moveFiles(plan: List<Pair<Media, String>>): Int = withContext(Dispatchers.IO) {
+        var bad = 0
+        plan.forEach { (m, path) ->
+            try {
+                val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
+                if (ctx.contentResolver.update(m.uri, v, null, null) < 1) bad++
+            } catch (e: Exception) {
+                bad++
+            }
+        }
+        bad
+    }
+
     /** Called after the system confirmed that the queued items were moved to the device trash. */
     fun onDeleted() {
         val gone = trashed.toSet()
@@ -446,7 +468,64 @@ fun RoundBtn(
 
 @Composable
 fun SortScreen(state: AppState) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showFolders by remember { mutableStateOf(false) }
+    var movePlan by remember { mutableStateOf<List<Pair<Media, String>>>(emptyList()) }
+
+    val trashLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { r ->
+        if (r.resultCode == Activity.RESULT_OK) {
+            state.onDeleted()
+            Toast.makeText(ctx, "تم تنفيذ الفرز", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(ctx, "لم يُحذف شيء", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun runTrash() {
+        val items = state.all.filter { it.id in state.trashed }
+        if (items.isEmpty()) {
+            Toast.makeText(ctx, "تم تنفيذ الفرز", Toast.LENGTH_LONG).show()
+            return
+        }
+        val pi = MediaStore.createTrashRequest(ctx.contentResolver, items.map { it.uri }, true)
+        trashLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+    }
+
+    val moveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { r ->
+        val plan = movePlan
+        movePlan = emptyList()
+        if (r.resultCode == Activity.RESULT_OK) {
+            scope.launch {
+                val failed = state.moveFiles(plan)
+                state.load()
+                if (failed > 0) {
+                    Toast.makeText(ctx, "تعذر نقل $failed من الملفات", Toast.LENGTH_LONG).show()
+                }
+                runTrash()
+            }
+        } else {
+            Toast.makeText(ctx, "أُلغي التنفيذ", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun execute() {
+        val plan = state.pendingMoves
+        if (plan.isEmpty()) {
+            runTrash()
+        } else {
+            movePlan = plan
+            val pi = MediaStore.createWriteRequest(ctx.contentResolver, plan.map { it.first.uri })
+            moveLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+        }
+    }
+
+    val pendingCount = state.pendingMoves.size + state.trashed.size
+
     Column(Modifier.fillMaxSize()) {
         if (state.loaded && state.all.isNotEmpty()) {
             Row(
@@ -466,6 +545,16 @@ fun SortScreen(state: AppState) {
                         )
                     }
                 )
+            }
+        }
+        if (state.loaded && pendingCount > 0) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Button(onClick = { execute() }) {
+                    Text("تنفيذ الفرز ($pendingCount)")
+                }
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) { SortContent(state) }
@@ -534,16 +623,6 @@ fun SortContent(state: AppState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             SwipeCard(cur, state, Modifier.weight(1f).fillMaxWidth())
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(28.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RoundBtn("✕", Color(0xFFD2473B), 68.dp) { state.trash(cur) }
-                RoundBtn("↶", MaterialTheme.colorScheme.onSurfaceVariant, 50.dp, state.history.isNotEmpty()) {
-                    state.undo()
-                }
-                RoundBtn("✓", Color(0xFF1F8A5B), 68.dp) { state.keep(cur, 0) }
-            }
             Text(
                 if (cur.isVideo) "هذا فيديو، تظهر ألبومات الفيديو فقط" else "هذه صورة، تظهر ألبومات الصور فقط",
                 fontSize = 13.sp,
