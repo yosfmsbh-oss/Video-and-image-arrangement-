@@ -103,10 +103,12 @@ class AppState(private val ctx: Context) {
     val history = mutableStateListOf<Long>()
     var loaded by mutableStateOf(false)
 
-    /** The device folder being sorted. null means every folder. */
-    var folderFilter by mutableStateOf<String?>(null)
+    /** The device folders being sorted. Empty means every folder. */
+    var selectedFolders by mutableStateOf<Set<String>>(emptySet())
 
-    val inScope by derivedStateOf { all.filter { folderFilter == null || it.folder == folderFilter } }
+    val inScope by derivedStateOf {
+        all.filter { selectedFolders.isEmpty() || it.folder in selectedFolders }
+    }
     val queue by derivedStateOf { inScope.filter { it.id !in kept && it.id !in trashed } }
 
     /** Device folders with how many items in each are still unsorted. */
@@ -116,13 +118,19 @@ class AppState(private val ctx: Context) {
             .sortedBy { it.first.lowercase() }
     }
 
-    fun selectFolder(name: String?) {
-        folderFilter = name
-        prefs.edit().putString("folder", name).apply()
+    private fun setFolders(set: Set<String>) {
+        selectedFolders = set
+        prefs.edit().putStringSet("folders", set).apply()
     }
 
+    fun toggleFolder(name: String) {
+        setFolders(if (name in selectedFolders) selectedFolders - name else selectedFolders + name)
+    }
+
+    fun clearFolders() = setFolders(emptySet())
+
     init {
-        folderFilter = prefs.getString("folder", null)
+        selectedFolders = prefs.getStringSet("folders", emptySet())?.toSet() ?: emptySet()
         prefs.getStringSet("kept", emptySet())?.forEach { s ->
             val p = s.split("=")
             val id = p.getOrNull(0)?.toLongOrNull()
@@ -194,7 +202,8 @@ class AppState(private val ctx: Context) {
         val ids = list.map { it.id }.toSet()
         kept.keys.retainAll(ids)
         trashed.retainAll(ids)
-        if (folderFilter != null && list.none { it.folder == folderFilter }) selectFolder(null)
+        val existing = list.map { it.folder }.toSet()
+        if (!existing.containsAll(selectedFolders)) setFolders(selectedFolders.intersect(existing))
         loaded = true
         save()
     }
@@ -386,7 +395,16 @@ fun SortScreen(state: AppState) {
             ) {
                 AssistChip(
                     onClick = { showFolders = true },
-                    label = { Text("المجلد: ${state.folderFilter ?: "كل المجلدات"} ▾") }
+                    label = {
+                        val sel = state.selectedFolders
+                        Text(
+                            "المجلدات: " + when (sel.size) {
+                                0 -> "الكل"
+                                1 -> sel.first()
+                                else -> "${sel.size} مجلدات"
+                            } + " ▾"
+                        )
+                    }
                 )
             }
         }
@@ -395,24 +413,22 @@ fun SortScreen(state: AppState) {
     if (showFolders) {
         AlertDialog(
             onDismissRequest = { showFolders = false },
-            title = { Text("اختر المجلد الذي تفرزه") },
+            title = { Text("اختر المجلدات التي تفرزها") },
             text = {
                 LazyColumn(Modifier.heightIn(max = 380.dp)) {
                     item {
-                        FolderRow("كل المجلدات", state.folders.sumOf { it.second }, state.folderFilter == null) {
-                            state.selectFolder(null)
-                            showFolders = false
+                        FolderRow("كل المجلدات", state.folders.sumOf { it.second }, state.selectedFolders.isEmpty()) {
+                            state.clearFolders()
                         }
                     }
                     items(state.folders, key = { it.first }) { (name, left) ->
-                        FolderRow(name, left, state.folderFilter == name) {
-                            state.selectFolder(name)
-                            showFolders = false
+                        FolderRow(name, left, name in state.selectedFolders) {
+                            state.toggleFolder(name)
                         }
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showFolders = false }) { Text("إغلاق") } }
+            confirmButton = { TextButton(onClick = { showFolders = false }) { Text("تم") } }
         )
     }
 }
@@ -424,7 +440,7 @@ fun FolderRow(name: String, left: Int, selected: Boolean, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
-            (if (selected) "✓ " else "") + name,
+            (if (selected) "☑ " else "☐ ") + name,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
         )
         Text("$left", color = MaterialTheme.colorScheme.onSurfaceVariant)
