@@ -116,12 +116,6 @@ fun canMoveTo(path: String, isVideo: Boolean): Boolean =
 
 fun canMoveAny(path: String): Boolean = canMoveTo(path, false) || canMoveTo(path, true)
 
-/** The real phone folder for an album made in the app: photos go to Pictures, videos to Movies. */
-fun folderPathFor(name: String, isVideo: Boolean): String {
-    val safe = name.replace(Regex("[\\\\/:*?\"<>|\\n]"), " ").trim().trim('.').ifEmpty { "Album" }
-    return (if (isVideo) "Movies/" else "Pictures/") + safe + "/"
-}
-
 /** All app state. Sorting decisions are saved on the device so they survive closing the app. */
 class AppState(private val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("farz", Context.MODE_PRIVATE)
@@ -195,22 +189,12 @@ class AppState(private val ctx: Context) {
             else if (id != null && p.size == 3) albums.add(Album(id, p[2], !canMoveTo(p[1], false), p[1]))
         }
         albums.sortBy { it.id }
-        // Albums made by older versions only lived inside the app: give them a real phone folder.
-        var migrated = false
-        for (i in albums.indices) {
-            val a = albums[i]
-            if (a.path == null) {
-                albums[i] = a.copy(path = folderPathFor(a.name, a.isVideo))
-                migrated = true
-            }
-        }
-        if (migrated) save()
         if (!prefs.getBoolean("init", false)) {
-            albums.add(Album(1, "المفضلة", false, folderPathFor("المفضلة", false)))
-            albums.add(Album(2, "سفر", false, folderPathFor("سفر", false)))
-            albums.add(Album(3, "عائلة", false, folderPathFor("عائلة", false)))
-            albums.add(Album(4, "لقطات مميزة", true, folderPathFor("لقطات مميزة", true)))
-            albums.add(Album(5, "ذكريات", true, folderPathFor("ذكريات", true)))
+            albums.add(Album(1, "المفضلة", false))
+            albums.add(Album(2, "سفر", false))
+            albums.add(Album(3, "عائلة", false))
+            albums.add(Album(4, "لقطات مميزة", true))
+            albums.add(Album(5, "ذكريات", true))
             save()
         }
     }
@@ -309,7 +293,7 @@ class AppState(private val ctx: Context) {
         val clean = name.replace("|", " ").replace("\n", " ").trim()
         if (clean.isEmpty() || albums.any { it.name == clean && it.isVideo == isVideo }) return
         val next = (albums.maxOfOrNull { it.id } ?: 0L) + 1
-        albums.add(Album(next, clean, isVideo, folderPathFor(clean, isVideo)))
+        albums.add(Album(next, clean, isVideo))
         save()
     }
 
@@ -349,78 +333,17 @@ class AppState(private val ctx: Context) {
         }
     }
 
-    /**
-     * Moves each item to its album folder. When Android refuses a direct move (files from other apps,
-     * other folders, or a name clash), the file is copied into the album folder instead and the
-     * original is queued for the device trash, so the result is the same as a move.
-     */
-    suspend fun moveFiles(plan: List<Pair<Media, String>>): Int {
-        val copied = ArrayList<Long>()
-        val bad = withContext(Dispatchers.IO) {
-            var failed = 0
-            plan.forEach { (m, path) ->
-                var ok = false
-                try {
-                    val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
-                    ok = ctx.contentResolver.update(m.uri, v, null, null) > 0
-                } catch (e: Exception) {
-                    ok = false
-                }
-                if (!ok) {
-                    if (copyInto(m, path)) copied.add(m.id) else failed++
-                }
+    suspend fun moveFiles(plan: List<Pair<Media, String>>): Int = withContext(Dispatchers.IO) {
+        var bad = 0
+        plan.forEach { (m, path) ->
+            try {
+                val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
+                if (ctx.contentResolver.update(m.uri, v, null, null) < 1) bad++
+            } catch (e: Exception) {
+                bad++
             }
-            failed
         }
-        if (copied.isNotEmpty()) {
-            copied.forEach { if (it !in trashed) trashed.add(it) }
-            save()
-        }
-        return bad
-    }
-
-    private fun copyInto(m: Media, path: String): Boolean {
-        val cr = ctx.contentResolver
-        var name: String? = null
-        var mime: String? = null
-        try {
-            cr.query(
-                m.uri,
-                arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE),
-                null, null, null
-            )?.use { c ->
-                if (c.moveToFirst()) {
-                    name = c.getString(0)
-                    mime = c.getString(1)
-                }
-            }
-        } catch (e: Exception) {
-            return false
-        }
-        val base = if (m.isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name ?: "farz_${m.id}")
-            put(MediaStore.MediaColumns.MIME_TYPE, mime ?: if (m.isVideo) "video/mp4" else "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, path)
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val target = try {
-            cr.insert(base, values)
-        } catch (e: Exception) {
-            null
-        } ?: return false
-        return try {
-            val input = cr.openInputStream(m.uri) ?: throw IllegalStateException("no input")
-            val output = cr.openOutputStream(target) ?: throw IllegalStateException("no output")
-            input.use { i -> output.use { o -> i.copyTo(o) } }
-            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-            cr.update(target, done, null, null)
-            true
-        } catch (e: Exception) {
-            try { cr.delete(target, null, null) } catch (_: Exception) {}
-            false
-        }
+        bad
     }
 
     /** Called after the system confirmed that the queued items were moved to the device trash. */
