@@ -28,6 +28,23 @@ jobs:
           mkdir -p src/main/java/com/yousef/farz
           cp MainActivity.kt src/main/java/com/yousef/farz/
           cp AndroidManifest.xml src/main/
+          mkdir -p src/main/res/drawable-nodpi src/main/res/mipmap-anydpi src/main/res/values
+          cp icon.png src/main/res/drawable-nodpi/ic_launcher_foreground.png
+          cat > src/main/res/values/ic_launcher_background.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#CBB7AE</color>
+          </resources>
+          XML
+          for n in ic_launcher ic_launcher_round; do
+          cat > src/main/res/mipmap-anydpi/$n.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          XML
+          done
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
@@ -39,5 +56,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: "فرز الصور - نسخة ${{ github.run_number }}"
+          name: "ترتيب الاستديو - نسخة ${{ github.run_number }}"
           files: farz.apk
