@@ -3,12 +3,14 @@ package com.yousef.farz
 import android.Manifest
 import android.app.Activity
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -64,6 +66,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,11 +89,19 @@ import coil.compose.AsyncImage
 import coil.decode.VideoFrameDecoder
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-data class Media(val id: Long, val uri: Uri, val isVideo: Boolean, val folder: String)
+data class Media(val id: Long, val uri: Uri, val isVideo: Boolean, val folder: String, val path: String)
 
-data class Album(val id: Long, val name: String, val isVideo: Boolean)
+/** An album made in the app. When [path] is set it stands for a real folder on the phone. */
+data class Album(val id: Long, val name: String, val isVideo: Boolean, val path: String? = null)
+
+/** Android only lets apps move photos into DCIM and Pictures, and videos into DCIM and Movies. */
+fun canMoveTo(path: String, isVideo: Boolean): Boolean =
+    path.startsWith("DCIM/") || path.startsWith(if (isVideo) "Movies/" else "Pictures/")
+
+fun canMoveAny(path: String): Boolean = canMoveTo(path, false) || canMoveTo(path, true)
 
 /** All app state. Sorting decisions are saved on the device so they survive closing the app. */
 class AppState(private val ctx: Context) {
@@ -145,6 +156,11 @@ class AppState(private val ctx: Context) {
             val id = p.getOrNull(0)?.toLongOrNull()
             if (id != null && p.size == 3) albums.add(Album(id, p[2], p[1] == "1"))
         }
+        prefs.getStringSet("devalbums", emptySet())?.forEach { s ->
+            val p = s.split("|", limit = 3)
+            val id = p.getOrNull(0)?.toLongOrNull()
+            if (id != null && p.size == 3) albums.add(Album(id, p[2], false, p[1]))
+        }
         albums.sortBy { it.id }
         if (!prefs.getBoolean("init", false)) {
             albums.add(Album(1, "المفضلة", false))
@@ -160,7 +176,14 @@ class AppState(private val ctx: Context) {
         prefs.edit()
             .putStringSet("kept", kept.map { "${it.key}=${it.value}" }.toSet())
             .putStringSet("trashed", trashed.map { it.toString() }.toSet())
-            .putStringSet("albums", albums.map { "${it.id}|${if (it.isVideo) 1 else 0}|${it.name}" }.toSet())
+            .putStringSet(
+                "albums",
+                albums.filter { it.path == null }.map { "${it.id}|${if (it.isVideo) 1 else 0}|${it.name}" }.toSet()
+            )
+            .putStringSet(
+                "devalbums",
+                albums.filter { it.path != null }.map { "${it.id}|${it.path}|${it.name}" }.toSet()
+            )
             .putBoolean("init", true)
             .apply()
     }
@@ -172,7 +195,8 @@ class AppState(private val ctx: Context) {
             val proj = arrayOf(
                 MediaStore.Files.FileColumns._ID,
                 MediaStore.Files.FileColumns.MEDIA_TYPE,
-                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
+                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+                MediaStore.MediaColumns.RELATIVE_PATH
             )
             val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE}=? OR ${MediaStore.Files.FileColumns.MEDIA_TYPE}=?"
             val args = arrayOf(
@@ -186,13 +210,15 @@ class AppState(private val ctx: Context) {
                 val idCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
                 val typeCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
                 val folderCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                val pathCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
                 while (c.moveToNext()) {
                     val id = c.getLong(idCol)
                     val folder = c.getString(folderCol) ?: "غير مصنف"
+                    val path = c.getString(pathCol) ?: ""
                     val video = c.getInt(typeCol) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
                     val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
                     else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    out.add(Media(id, ContentUris.withAppendedId(base, id), video, folder))
+                    out.add(Media(id, ContentUris.withAppendedId(base, id), video, folder, path))
                 }
             }
             out
@@ -239,6 +265,25 @@ class AppState(private val ctx: Context) {
         if (clean.isEmpty() || albums.any { it.name == clean && it.isVideo == isVideo }) return
         val next = (albums.maxOfOrNull { it.id } ?: 0L) + 1
         albums.add(Album(next, clean, isVideo))
+        save()
+    }
+
+    /** Phone folders that photos or videos can be moved into: path to display name, with item count. */
+    val deviceFolders by derivedStateOf {
+        all.filter { it.path.isNotEmpty() && canMoveAny(it.path) }
+            .groupBy { it.path }
+            .map { (path, list) -> Triple(path, list.first().folder, list.size) }
+            .sortedBy { it.second.lowercase() }
+    }
+
+    fun toggleDeviceAlbum(path: String, name: String) {
+        val existing = albums.firstOrNull { it.path == path }
+        if (existing != null) {
+            albums.remove(existing)
+        } else {
+            val next = (albums.maxOfOrNull { it.id } ?: 0L) + 1
+            albums.add(Album(next, name.replace("|", " ").replace("\n", " "), false, path))
+        }
         save()
     }
 
@@ -452,6 +497,7 @@ fun SortContent(state: AppState) {
     val queue = state.queue
     val cur = queue.firstOrNull()
     var showAdd by remember { mutableStateOf(false) }
+    var showDevice by remember { mutableStateOf(false) }
 
     if (!state.loaded) {
         Centered("جاري التحميل…")
@@ -488,17 +534,69 @@ fun SortContent(state: AppState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.albums.filter { it.isVideo == cur.isVideo }) { a ->
-                    AssistChip(onClick = { state.keep(cur, a.id) }, label = { Text(a.name) })
+                items(
+                    state.albums.filter {
+                        if (it.path != null) canMoveTo(it.path, cur.isVideo) else it.isVideo == cur.isVideo
+                    },
+                    key = { it.id }
+                ) { a ->
+                    AssistChip(
+                        onClick = { state.keep(cur, a.id) },
+                        label = { Text(if (a.path != null) "📁 ${a.name}" else a.name) }
+                    )
                 }
                 item {
                     AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
                 }
+                item {
+                    AssistChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
+                }
             }
             Text(
-                "اسحب يميناً للاحتفاظ، وللأعلى للحذف",
+                "يميناً للاحتفاظ، للأعلى للحذف، يساراً للرجوع للسابق",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (showDevice) {
+            AlertDialog(
+                onDismissRequest = { showDevice = false },
+                title = { Text("مجلدات الجوال للنقل إليها") },
+                text = {
+                    Column {
+                        Text(
+                            "اختر المجلدات التي تريدها بين الأزرار. تظهر المجلدات التي يسمح أندرويد بالنقل إليها.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        LazyColumn(Modifier.heightIn(max = 340.dp)) {
+                            items(state.deviceFolders, key = { it.first }) { (path, name, count) ->
+                                val on = state.albums.any { it.path == path }
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { state.toggleDeviceAlbum(path, name) }
+                                        .padding(vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            (if (on) "☑ " else "☐ ") + name,
+                                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Text(
+                                            path,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showDevice = false }) { Text("تم") } }
             )
         }
         if (showAdd) {
@@ -536,6 +634,9 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
                             state.trash(m)
                         } else if (o.x > threshold) {
                             state.keep(m, 0)
+                        } else if (o.x < -threshold) {
+                            off = Offset.Zero
+                            state.undo()
                         } else {
                             off = Offset.Zero
                         }
@@ -574,6 +675,18 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
                 .align(Alignment.TopStart)
                 .padding(20.dp)
                 .alpha((off.x / threshold).coerceIn(0f, 1f))
+                .background(Color(0xDDFFFFFF), RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+        Text(
+            "السابق",
+            color = Color(0xFF1F6F8B),
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(20.dp)
+                .alpha((-off.x / threshold).coerceIn(0f, 1f))
                 .background(Color(0xDDFFFFFF), RoundedCornerShape(10.dp))
                 .padding(horizontal = 12.dp, vertical = 4.dp)
         )
@@ -652,6 +765,37 @@ fun AlbumsScreen(state: AppState) {
     var open by remember { mutableStateOf<Long?>(null) } // -1 = all kept
     var selected by remember { mutableStateOf<Media?>(null) }
     val loader = rememberLoader()
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var moving by remember { mutableStateOf<Pair<List<Uri>, String>?>(null) }
+    val moveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { r ->
+        val job = moving
+        moving = null
+        if (r.resultCode == Activity.RESULT_OK && job != null) {
+            scope.launch {
+                val failed = withContext(Dispatchers.IO) {
+                    var bad = 0
+                    job.first.forEach { uri ->
+                        try {
+                            val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, job.second) }
+                            if (ctx.contentResolver.update(uri, v, null, null) < 1) bad++
+                        } catch (e: Exception) {
+                            bad++
+                        }
+                    }
+                    bad
+                }
+                state.load()
+                Toast.makeText(
+                    ctx,
+                    if (failed == 0) "تم النقل" else "تعذر نقل $failed من الملفات",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     fun matches(video: Boolean) = filter == 0 || (filter == 1 && !video) || (filter == 2 && video)
 
@@ -669,6 +813,24 @@ fun AlbumsScreen(state: AppState) {
                 TextButton(onClick = { open = null }) { Text("رجوع") }
                 Text(album?.name ?: "كل المحفوظات", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             }
+            val target = album?.path
+            if (target != null) {
+                val pending = shown.filter { it.path != target }
+                Button(
+                    enabled = pending.isNotEmpty(),
+                    onClick = {
+                        moving = pending.map { it.uri } to target
+                        val pi = MediaStore.createWriteRequest(ctx.contentResolver, pending.map { it.uri })
+                        moveLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                    }
+                ) { Text("انقل ${pending.size} إلى مجلد الجوال") }
+                Text(
+                    "الفرز هنا داخل التطبيق فقط. اضغط الزر ليُنقل فعلياً إلى $target بعد تأكيد النظام.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
             if (shown.isEmpty()) {
                 Centered("لا يوجد شيء هنا بعد")
             } else {
@@ -684,7 +846,7 @@ fun AlbumsScreen(state: AppState) {
             }
         }
     } else {
-        val tiles = state.albums.filter { matches(it.isVideo) }
+        val tiles = state.albums.filter { it.path != null || matches(it.isVideo) }
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("الكل", "صور", "فيديو").forEachIndexed { i, t ->
@@ -702,7 +864,7 @@ fun AlbumsScreen(state: AppState) {
                 }
                 items(tiles, key = { it.id }) { a ->
                     val list = state.all.filter { state.kept[it.id] == a.id }
-                    AlbumTile(a.name, if (a.isVideo) "فيديو" else "صور", list.size, list.firstOrNull(), loader) {
+                    AlbumTile(a.name, if (a.path != null) "مجلد" else if (a.isVideo) "فيديو" else "صور", list.size, list.firstOrNull(), loader) {
                         open = a.id
                     }
                 }
