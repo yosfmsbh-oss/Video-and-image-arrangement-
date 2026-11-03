@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -86,7 +88,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class Media(val id: Long, val uri: Uri, val isVideo: Boolean)
+data class Media(val id: Long, val uri: Uri, val isVideo: Boolean, val folder: String)
 
 data class Album(val id: Long, val name: String, val isVideo: Boolean)
 
@@ -101,9 +103,26 @@ class AppState(private val ctx: Context) {
     val history = mutableStateListOf<Long>()
     var loaded by mutableStateOf(false)
 
-    val queue by derivedStateOf { all.filter { it.id !in kept && it.id !in trashed } }
+    /** The device folder being sorted. null means every folder. */
+    var folderFilter by mutableStateOf<String?>(null)
+
+    val inScope by derivedStateOf { all.filter { folderFilter == null || it.folder == folderFilter } }
+    val queue by derivedStateOf { inScope.filter { it.id !in kept && it.id !in trashed } }
+
+    /** Device folders with how many items in each are still unsorted. */
+    val folders by derivedStateOf {
+        all.groupBy { it.folder }
+            .map { (name, list) -> name to list.count { it.id !in kept && it.id !in trashed } }
+            .sortedBy { it.first.lowercase() }
+    }
+
+    fun selectFolder(name: String?) {
+        folderFilter = name
+        prefs.edit().putString("folder", name).apply()
+    }
 
     init {
+        folderFilter = prefs.getString("folder", null)
         prefs.getStringSet("kept", emptySet())?.forEach { s ->
             val p = s.split("=")
             val id = p.getOrNull(0)?.toLongOrNull()
@@ -144,7 +163,8 @@ class AppState(private val ctx: Context) {
             val files = MediaStore.Files.getContentUri("external")
             val proj = arrayOf(
                 MediaStore.Files.FileColumns._ID,
-                MediaStore.Files.FileColumns.MEDIA_TYPE
+                MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
             )
             val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE}=? OR ${MediaStore.Files.FileColumns.MEDIA_TYPE}=?"
             val args = arrayOf(
@@ -157,12 +177,14 @@ class AppState(private val ctx: Context) {
             )?.use { c ->
                 val idCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
                 val typeCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+                val folderCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
                 while (c.moveToNext()) {
                     val id = c.getLong(idCol)
+                    val folder = c.getString(folderCol) ?: "غير مصنف"
                     val video = c.getInt(typeCol) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
                     val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
                     else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    out.add(Media(id, ContentUris.withAppendedId(base, id), video))
+                    out.add(Media(id, ContentUris.withAppendedId(base, id), video, folder))
                 }
             }
             out
@@ -172,6 +194,7 @@ class AppState(private val ctx: Context) {
         val ids = list.map { it.id }.toSet()
         kept.keys.retainAll(ids)
         trashed.retainAll(ids)
+        if (folderFilter != null && list.none { it.folder == folderFilter }) selectFolder(null)
         loaded = true
         save()
     }
@@ -354,6 +377,62 @@ fun RoundBtn(
 
 @Composable
 fun SortScreen(state: AppState) {
+    var showFolders by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        if (state.loaded && state.all.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                AssistChip(
+                    onClick = { showFolders = true },
+                    label = { Text("المجلد: ${state.folderFilter ?: "كل المجلدات"} ▾") }
+                )
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) { SortContent(state) }
+    }
+    if (showFolders) {
+        AlertDialog(
+            onDismissRequest = { showFolders = false },
+            title = { Text("اختر المجلد الذي تفرزه") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                    item {
+                        FolderRow("كل المجلدات", state.folders.sumOf { it.second }, state.folderFilter == null) {
+                            state.selectFolder(null)
+                            showFolders = false
+                        }
+                    }
+                    items(state.folders, key = { it.first }) { (name, left) ->
+                        FolderRow(name, left, state.folderFilter == name) {
+                            state.selectFolder(name)
+                            showFolders = false
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showFolders = false }) { Text("إغلاق") } }
+        )
+    }
+}
+
+@Composable
+fun FolderRow(name: String, left: Int, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            (if (selected) "✓ " else "") + name,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
+        Text("$left", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun SortContent(state: AppState) {
     val queue = state.queue
     val cur = queue.firstOrNull()
     var showAdd by remember { mutableStateOf(false) }
@@ -373,7 +452,7 @@ fun SortScreen(state: AppState) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "${state.all.size - queue.size} من ${state.all.size} تم فرزها",
+                "${state.inScope.size - queue.size} من ${state.inScope.size} تم فرزها",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             SwipeCard(cur, state, Modifier.weight(1f).fillMaxWidth())
