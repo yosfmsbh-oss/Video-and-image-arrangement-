@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -57,6 +58,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -452,9 +457,7 @@ class MainActivity : ComponentActivity() {
         val state = AppState(applicationContext)
         appState = state
         setContent {
-            MaterialTheme(
-                colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-            ) {
+            IosTheme {
                 App(state)
             }
         }
@@ -508,7 +511,9 @@ fun Main(state: AppState) {
     val glyphs = listOf("⇆", "▦", "✕")
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            Column {
+            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0x33808080)))
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                 labels.forEachIndexed { i, t ->
                     val n = when (i) {
                         0 -> state.queue.size
@@ -518,10 +523,18 @@ fun Main(state: AppState) {
                     NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
-                        icon = { Text(glyphs[i], fontSize = 20.sp) },
-                        label = { Text("$t ($n)") }
+                        icon = { Text(glyphs[i], fontSize = 22.sp) },
+                        label = { Text("$t ($n)", fontSize = 11.sp) },
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = Color.Transparent,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     )
                 }
+            }
             }
         }
     ) { pad ->
@@ -644,7 +657,7 @@ fun SortScreen(state: AppState) {
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
-                AssistChip(
+                IosChip(
                     onClick = { showFolders = true },
                     label = {
                         val sel = state.selectedFolders
@@ -754,13 +767,13 @@ fun SortContent(state: AppState) {
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 shownAlbums.forEach { a ->
-                    AssistChip(
+                    IosChip(
                         onClick = { state.keep(cur, a.id) },
                         label = { Text("📁 ${a.name}") }
                     )
                 }
-                AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
-                AssistChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
+                IosChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
+                IosChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
             }
             }
             Text(
@@ -816,14 +829,14 @@ fun SortContent(state: AppState) {
                                             modifier = Modifier.padding(top = 6.dp)
                                         ) {
                                             if (photoOk) {
-                                                FilterChip(
+                                                IosFilter(
                                                     selected = !album.isVideo,
                                                     onClick = { state.setDeviceAlbumType(path, false) },
                                                     label = { Text("صور") }
                                                 )
                                             }
                                             if (videoOk) {
-                                                FilterChip(
+                                                IosFilter(
                                                     selected = album.isVideo,
                                                     onClick = { state.setDeviceAlbumType(path, true) },
                                                     label = { Text("فيديو") }
@@ -1040,8 +1053,8 @@ fun AddAlbumDialog(defaultVideo: Boolean, onDismiss: () -> Unit, onAdd: (String,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(top = 12.dp)
                 ) {
-                    FilterChip(selected = !video, onClick = { video = false }, label = { Text("صور") })
-                    FilterChip(selected = video, onClick = { video = true }, label = { Text("فيديو") })
+                    IosFilter(selected = !video, onClick = { video = false }, label = { Text("صور") })
+                    IosFilter(selected = video, onClick = { video = true }, label = { Text("فيديو") })
                 }
             }
         },
@@ -1166,7 +1179,7 @@ fun AlbumsScreen(state: AppState) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("الكل", "صور", "فيديو").forEachIndexed { i, t ->
-                    FilterChip(selected = filter == i, onClick = { filter = i }, label = { Text(t) })
+                    IosFilter(selected = filter == i, onClick = { filter = i }, label = { Text(t) })
                 }
             }
             LazyVerticalGrid(
@@ -1284,4 +1297,79 @@ fun TrashScreen(state: AppState) {
             }
         }
     }
+}
+
+
+// ---------- iPhone-style look ----------
+
+@Composable
+fun IosTheme(content: @Composable () -> Unit) {
+    val dark = isSystemInDarkTheme()
+    val scheme = if (dark) {
+        darkColorScheme(
+            primary = Color(0xFF0A84FF), onPrimary = Color.White,
+            background = Color(0xFF000000), onBackground = Color.White,
+            surface = Color(0xFF1C1C1E), onSurface = Color.White,
+            surfaceVariant = Color(0xFF2C2C2E), onSurfaceVariant = Color(0xFF8E8E93),
+            surfaceContainer = Color(0xFF1C1C1E), surfaceContainerHigh = Color(0xFF2C2C2E),
+            surfaceContainerHighest = Color(0xFF2C2C2E),
+            secondaryContainer = Color(0xFF2C2C2E), onSecondaryContainer = Color.White,
+            outline = Color(0xFF38383A), error = Color(0xFFFF453A)
+        )
+    } else {
+        lightColorScheme(
+            primary = Color(0xFF007AFF), onPrimary = Color.White,
+            background = Color(0xFFF2F2F7), onBackground = Color.Black,
+            surface = Color.White, onSurface = Color.Black,
+            surfaceVariant = Color(0xFFE5E5EA), onSurfaceVariant = Color(0xFF8E8E93),
+            surfaceContainer = Color.White, surfaceContainerHigh = Color.White,
+            surfaceContainerHighest = Color.White,
+            secondaryContainer = Color(0xFFE5E5EA), onSecondaryContainer = Color.Black,
+            outline = Color(0xFFC6C6C8), error = Color(0xFFFF3B30)
+        )
+    }
+    MaterialTheme(
+        colorScheme = scheme,
+        shapes = Shapes(
+            small = RoundedCornerShape(10.dp),
+            medium = RoundedCornerShape(12.dp),
+            large = RoundedCornerShape(16.dp),
+            extraLarge = RoundedCornerShape(14.dp)
+        ),
+        content = content
+    )
+}
+
+/** Capsule button with a soft gray fill and blue text, like iOS. */
+@Composable
+fun IosChip(onClick: () -> Unit, label: @Composable () -> Unit, enabled: Boolean = true) {
+    AssistChip(
+        onClick = onClick,
+        label = label,
+        enabled = enabled,
+        shape = RoundedCornerShape(50),
+        border = null,
+        colors = AssistChipDefaults.assistChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            labelColor = MaterialTheme.colorScheme.primary
+        )
+    )
+}
+
+/** Segment-like chip: blue when selected, soft gray otherwise. */
+@Composable
+fun IosFilter(selected: Boolean, onClick: () -> Unit, label: @Composable () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = label,
+        shape = RoundedCornerShape(50),
+        border = null,
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            labelColor = MaterialTheme.colorScheme.onSurface,
+            selectedContainerColor = MaterialTheme.colorScheme.primary,
+            selectedLabelColor = Color.White
+        )
+    )
 }
