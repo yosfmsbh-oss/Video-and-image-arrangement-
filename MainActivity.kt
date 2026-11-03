@@ -33,7 +33,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -157,9 +161,11 @@ class AppState(private val ctx: Context) {
             if (id != null && p.size == 3) albums.add(Album(id, p[2], p[1] == "1"))
         }
         prefs.getStringSet("devalbums", emptySet())?.forEach { s ->
-            val p = s.split("|", limit = 3)
+            // new format: id|type|path|name. Older format: id|path|name (photos).
+            val p = s.split("|", limit = 4)
             val id = p.getOrNull(0)?.toLongOrNull()
-            if (id != null && p.size == 3) albums.add(Album(id, p[2], false, p[1]))
+            if (id != null && p.size == 4) albums.add(Album(id, p[3], p[1] == "1", p[2]))
+            else if (id != null && p.size == 3) albums.add(Album(id, p[2], !canMoveTo(p[1], false), p[1]))
         }
         albums.sortBy { it.id }
         if (!prefs.getBoolean("init", false)) {
@@ -182,7 +188,8 @@ class AppState(private val ctx: Context) {
             )
             .putStringSet(
                 "devalbums",
-                albums.filter { it.path != null }.map { "${it.id}|${it.path}|${it.name}" }.toSet()
+                albums.filter { it.path != null }
+                    .map { "${it.id}|${if (it.isVideo) 1 else 0}|${it.path}|${it.name}" }.toSet()
             )
             .putBoolean("init", true)
             .apply()
@@ -276,15 +283,23 @@ class AppState(private val ctx: Context) {
             .sortedBy { it.second.lowercase() }
     }
 
-    fun toggleDeviceAlbum(path: String, name: String) {
+    fun toggleDeviceAlbum(path: String, name: String, isVideo: Boolean) {
         val existing = albums.firstOrNull { it.path == path }
         if (existing != null) {
             albums.remove(existing)
         } else {
             val next = (albums.maxOfOrNull { it.id } ?: 0L) + 1
-            albums.add(Album(next, name.replace("|", " ").replace("\n", " "), false, path))
+            albums.add(Album(next, name.replace("|", " ").replace("\n", " "), isVideo, path))
         }
         save()
+    }
+
+    fun setDeviceAlbumType(path: String, isVideo: Boolean) {
+        val i = albums.indexOfFirst { it.path == path }
+        if (i >= 0) {
+            albums[i] = albums[i].copy(isVideo = isVideo)
+            save()
+        }
     }
 
     /** Called after the system confirmed that the queued items were moved to the device trash. */
@@ -492,6 +507,7 @@ fun FolderRow(name: String, left: Int, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SortContent(state: AppState) {
     val queue = state.queue
@@ -533,24 +549,22 @@ fun SortContent(state: AppState) {
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(
-                    state.albums.filter {
-                        if (it.path != null) canMoveTo(it.path, cur.isVideo) else it.isVideo == cur.isVideo
-                    },
-                    key = { it.id }
-                ) { a ->
+            // Chips wrap onto several rows and scroll, so many folders fit at once.
+            FlowRow(
+                Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                state.albums.filter {
+                    it.isVideo == cur.isVideo && (it.path == null || canMoveTo(it.path, cur.isVideo))
+                }.forEach { a ->
                     AssistChip(
                         onClick = { state.keep(cur, a.id) },
                         label = { Text(if (a.path != null) "📁 ${a.name}" else a.name) }
                     )
                 }
-                item {
-                    AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
-                }
-                item {
-                    AssistChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
-                }
+                AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
+                AssistChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
             }
             Text(
                 "يميناً للاحتفاظ، للأعلى للحذف، يساراً للرجوع للسابق",
@@ -565,32 +579,61 @@ fun SortContent(state: AppState) {
                 text = {
                     Column {
                         Text(
-                            "اختر المجلدات التي تريدها بين الأزرار. تظهر المجلدات التي يسمح أندرويد بالنقل إليها.",
+                            "علّم المجلدات التي تريدها بين الأزرار، وحدد نوع كل مجلد: صور أو فيديو. تظهر المجلدات التي يسمح أندرويد بالنقل إليها.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
                         LazyColumn(Modifier.heightIn(max = 340.dp)) {
                             items(state.deviceFolders, key = { it.first }) { (path, name, count) ->
-                                val on = state.albums.any { it.path == path }
-                                Row(
+                                val album = state.albums.firstOrNull { it.path == path }
+                                val on = album != null
+                                val photoOk = canMoveTo(path, false)
+                                val videoOk = canMoveTo(path, true)
+                                val startVideo = if (cur.isVideo) videoOk else !photoOk
+                                Column(
                                     Modifier.fillMaxWidth()
-                                        .clickable { state.toggleDeviceAlbum(path, name) }
-                                        .padding(vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                        .clickable { state.toggleDeviceAlbum(path, name, startVideo) }
+                                        .padding(vertical = 10.dp)
                                 ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            (if (on) "☑ " else "☐ ") + name,
-                                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                        Text(
-                                            path,
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                (if (on) "☑ " else "☐ ") + name,
+                                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                            Text(
+                                                path,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (album != null) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.padding(top = 6.dp)
+                                        ) {
+                                            if (photoOk) {
+                                                FilterChip(
+                                                    selected = !album.isVideo,
+                                                    onClick = { state.setDeviceAlbumType(path, false) },
+                                                    label = { Text("صور") }
+                                                )
+                                            }
+                                            if (videoOk) {
+                                                FilterChip(
+                                                    selected = album.isVideo,
+                                                    onClick = { state.setDeviceAlbumType(path, true) },
+                                                    label = { Text("فيديو") }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -846,7 +889,7 @@ fun AlbumsScreen(state: AppState) {
             }
         }
     } else {
-        val tiles = state.albums.filter { it.path != null || matches(it.isVideo) }
+        val tiles = state.albums.filter { matches(it.isVideo) }
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("الكل", "صور", "فيديو").forEachIndexed { i, t ->
@@ -864,7 +907,7 @@ fun AlbumsScreen(state: AppState) {
                 }
                 items(tiles, key = { it.id }) { a ->
                     val list = state.all.filter { state.kept[it.id] == a.id }
-                    AlbumTile(a.name, if (a.path != null) "مجلد" else if (a.isVideo) "فيديو" else "صور", list.size, list.firstOrNull(), loader) {
+                    AlbumTile(a.name, (if (a.path != null) "مجلد " else "") + (if (a.isVideo) "فيديو" else "صور"), list.size, list.firstOrNull(), loader) {
                         open = a.id
                     }
                 }
