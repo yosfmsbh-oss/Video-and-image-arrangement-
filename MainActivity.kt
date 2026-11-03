@@ -349,17 +349,78 @@ class AppState(private val ctx: Context) {
         }
     }
 
-    suspend fun moveFiles(plan: List<Pair<Media, String>>): Int = withContext(Dispatchers.IO) {
-        var bad = 0
-        plan.forEach { (m, path) ->
-            try {
-                val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
-                if (ctx.contentResolver.update(m.uri, v, null, null) < 1) bad++
-            } catch (e: Exception) {
-                bad++
+    /**
+     * Moves each item to its album folder. When Android refuses a direct move (files from other apps,
+     * other folders, or a name clash), the file is copied into the album folder instead and the
+     * original is queued for the device trash, so the result is the same as a move.
+     */
+    suspend fun moveFiles(plan: List<Pair<Media, String>>): Int {
+        val copied = ArrayList<Long>()
+        val bad = withContext(Dispatchers.IO) {
+            var failed = 0
+            plan.forEach { (m, path) ->
+                var ok = false
+                try {
+                    val v = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
+                    ok = ctx.contentResolver.update(m.uri, v, null, null) > 0
+                } catch (e: Exception) {
+                    ok = false
+                }
+                if (!ok) {
+                    if (copyInto(m, path)) copied.add(m.id) else failed++
+                }
             }
+            failed
         }
-        bad
+        if (copied.isNotEmpty()) {
+            copied.forEach { if (it !in trashed) trashed.add(it) }
+            save()
+        }
+        return bad
+    }
+
+    private fun copyInto(m: Media, path: String): Boolean {
+        val cr = ctx.contentResolver
+        var name: String? = null
+        var mime: String? = null
+        try {
+            cr.query(
+                m.uri,
+                arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    name = c.getString(0)
+                    mime = c.getString(1)
+                }
+            }
+        } catch (e: Exception) {
+            return false
+        }
+        val base = if (m.isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name ?: "farz_${m.id}")
+            put(MediaStore.MediaColumns.MIME_TYPE, mime ?: if (m.isVideo) "video/mp4" else "image/jpeg")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, path)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val target = try {
+            cr.insert(base, values)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        return try {
+            val input = cr.openInputStream(m.uri) ?: throw IllegalStateException("no input")
+            val output = cr.openOutputStream(target) ?: throw IllegalStateException("no output")
+            input.use { i -> output.use { o -> i.copyTo(o) } }
+            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            cr.update(target, done, null, null)
+            true
+        } catch (e: Exception) {
+            try { cr.delete(target, null, null) } catch (_: Exception) {}
+            false
+        }
     }
 
     /** Called after the system confirmed that the queued items were moved to the device trash. */
