@@ -741,15 +741,19 @@ fun SortContent(state: AppState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             // Chips wrap onto several rows and scroll, so many folders fit at once.
+            // The list is built here, outside the FlowRow, so it is rebuilt for every file:
+            // photos get only photo albums, videos only video albums.
+            val isVideoNow = cur.isVideo
+            val shownAlbums = state.albums.filter {
+                it.isVideo == isVideoNow && (it.path == null || canMoveTo(it.path, isVideoNow))
+            }.toList()
+            key(cur.id, isVideoNow) {
             FlowRow(
                 Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Photos show only photo albums, videos only video albums, always in the same order.
-                state.albums.filter {
-                    it.isVideo == cur.isVideo && (it.path == null || canMoveTo(it.path, cur.isVideo))
-                }.forEach { a ->
+                shownAlbums.forEach { a ->
                     AssistChip(
                         onClick = { state.keep(cur, a.id) },
                         label = { Text("📁 ${a.name}") }
@@ -757,6 +761,7 @@ fun SortContent(state: AppState) {
                 }
                 AssistChip(onClick = { showAdd = true }, label = { Text("+ ألبوم جديد") })
                 AssistChip(onClick = { showDevice = true }, label = { Text("+ مجلد من الجوال") })
+            }
             }
             Text(
                 "يميناً للاحتفاظ، للأعلى للحذف، يساراً للرجوع للسابق",
