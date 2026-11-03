@@ -413,7 +413,7 @@ fun App(state: AppState) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("فرز الصور", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text("ترتيب الاستديو", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "يحتاج التطبيق إذن الوصول إلى الصور والفيديو ليعرضها لك وتفرزها.",
                     modifier = Modifier.padding(vertical = 16.dp)
