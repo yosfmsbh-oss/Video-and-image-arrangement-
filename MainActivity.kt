@@ -20,7 +20,12 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import android.widget.VideoView
+import android.view.TextureView
+import androidx.compose.runtime.DisposableEffect
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.key
@@ -122,6 +127,15 @@ class AppState(private val ctx: Context) {
     val history = mutableStateListOf<Long>()
     var loaded by mutableStateOf(false)
 
+    /** True while the app is on screen, so videos stop when you leave it. */
+    var foreground by mutableStateOf(true)
+    var muted by mutableStateOf(prefs.getBoolean("muted", false))
+
+    fun toggleMute() {
+        muted = !muted
+        prefs.edit().putBoolean("muted", muted).apply()
+    }
+
     /** The device folders being sorted. Empty means every folder. */
     var selectedFolders by mutableStateOf<Set<String>>(emptySet())
 
@@ -159,6 +173,9 @@ class AppState(private val ctx: Context) {
         prefs.getStringSet("trashed", emptySet())?.forEach { s ->
             s.toLongOrNull()?.let { trashed.add(it) }
         }
+        prefs.getString("history", "")?.split(",")?.forEach { s ->
+            s.toLongOrNull()?.let { history.add(it) }
+        }
         prefs.getStringSet("albums", emptySet())?.forEach { s ->
             val p = s.split("|", limit = 3)
             val id = p.getOrNull(0)?.toLongOrNull()
@@ -195,6 +212,7 @@ class AppState(private val ctx: Context) {
                 albums.filter { it.path != null }
                     .map { "${it.id}|${if (it.isVideo) 1 else 0}|${it.path}|${it.name}" }.toSet()
             )
+            .putString("history", history.takeLast(300).joinToString(","))
             .putBoolean("init", true)
             .apply()
     }
@@ -339,10 +357,23 @@ class AppState(private val ctx: Context) {
 }
 
 class MainActivity : ComponentActivity() {
+    private var appState: AppState? = null
+
+    override fun onStart() {
+        super.onStart()
+        appState?.foreground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        appState?.foreground = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val state = AppState(applicationContext)
+        appState = state
         setContent {
             MaterialTheme(
                 colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
@@ -753,23 +784,47 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
             .clip(RoundedCornerShape(20.dp))
             .background(Color.Black)
     ) {
-        var player by remember(m.id) { mutableStateOf<VideoView?>(null) }
-        if (m.isVideo) {
-            // The video plays on the card itself, looping, with sound. Tap to pause or resume.
-            key(m.id) {
-                AndroidView(
-                    factory = { c ->
-                        VideoView(c).apply {
-                            setVideoURI(m.uri)
-                            setOnPreparedListener { mp ->
-                                mp.isLooping = true
-                                start()
-                            }
-                            player = this
+        val ctx = LocalContext.current
+        var paused by remember(m.id) { mutableStateOf(false) }
+        var ratio by remember(m.id) { mutableStateOf(0f) }
+        // One player per video, drawn on a TextureView so it moves and rotates with the card.
+        val exo: ExoPlayer? = if (m.isVideo) {
+            remember(m.id) {
+                ExoPlayer.Builder(ctx).build().apply {
+                    setMediaItem(MediaItem.fromUri(m.uri))
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    playWhenReady = false
+                    prepare()
+                }
+            }
+        } else {
+            null
+        }
+        if (exo != null) {
+            DisposableEffect(exo) {
+                val l = object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        if (videoSize.width > 0 && videoSize.height > 0) {
+                            ratio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                         }
-                    },
-                    onRelease = { it.stopPlayback() },
-                    modifier = Modifier.fillMaxSize()
+                    }
+                }
+                exo.addListener(l)
+                onDispose {
+                    exo.removeListener(l)
+                    exo.release()
+                }
+            }
+            LaunchedEffect(exo, paused, state.foreground) {
+                exo.playWhenReady = !paused && state.foreground
+            }
+            LaunchedEffect(exo, state.muted) {
+                exo.volume = if (state.muted) 0f else 1f
+            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AndroidView(
+                    factory = { c -> TextureView(c).also { exo.setVideoTextureView(it) } },
+                    modifier = if (ratio > 0f) Modifier.aspectRatio(ratio) else Modifier.fillMaxSize()
                 )
             }
         } else {
@@ -788,7 +843,7 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
                 .fillMaxSize()
                 .pointerInput(m.id) {
                     detectTapGestures {
-                        player?.let { if (it.isPlaying) it.pause() else it.start() }
+                        if (m.isVideo) paused = !paused
                     }
                 }
                 .pointerInput(m.id) {
@@ -815,13 +870,23 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
         )
         if (m.isVideo) {
             Text(
-                "فيديو · اضغط للإيقاف",
+                if (paused) "متوقف · اضغط للتشغيل" else "فيديو · اضغط للإيقاف",
                 color = Color.White,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(12.dp)
                     .background(Color(0x99000000), RoundedCornerShape(20.dp))
                     .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+            Text(
+                if (state.muted) "🔇" else "🔊",
+                fontSize = 22.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .background(Color(0x99000000), CircleShape)
+                    .clickable { state.toggleMute() }
+                    .padding(10.dp)
             )
         }
         Text(

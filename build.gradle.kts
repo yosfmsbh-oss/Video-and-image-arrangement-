@@ -16,6 +16,16 @@ android {
         versionName = "1.0"
     }
 
+    // One fixed key, so a new build installs over the old one and keeps your sorting.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("farz.keystore")
+            storePassword = "farz1234"
+            keyAlias = "farz"
+            keyPassword = "farz1234"
+        }
+    }
+
     buildFeatures {
         compose = true
     }
@@ -36,6 +46,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
 }
