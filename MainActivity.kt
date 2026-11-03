@@ -20,7 +20,11 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import android.widget.VideoView
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.key
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -748,38 +752,70 @@ fun SwipeCard(m: Media, state: AppState, modifier: Modifier) {
             }
             .clip(RoundedCornerShape(20.dp))
             .background(Color.Black)
-            .pointerInput(m.id) {
-                detectDragGestures(
-                    onDragEnd = {
-                        val o = off
-                        if (o.y < -threshold && -o.y > abs(o.x)) {
-                            state.trash(m)
-                        } else if (o.x > threshold) {
-                            state.keep(m, 0)
-                        } else if (o.x < -threshold) {
-                            off = Offset.Zero
-                            state.undo()
-                        } else {
-                            off = Offset.Zero
+    ) {
+        var player by remember(m.id) { mutableStateOf<VideoView?>(null) }
+        if (m.isVideo) {
+            // The video plays on the card itself, looping, with sound. Tap to pause or resume.
+            key(m.id) {
+                AndroidView(
+                    factory = { c ->
+                        VideoView(c).apply {
+                            setVideoURI(m.uri)
+                            setOnPreparedListener { mp ->
+                                mp.isLooping = true
+                                start()
+                            }
+                            player = this
                         }
                     },
-                    onDragCancel = { off = Offset.Zero }
-                ) { change, drag ->
-                    change.consume()
-                    off += drag
-                }
+                    onRelease = { it.stopPlayback() },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
-    ) {
-        AsyncImage(
-            model = m.uri,
-            imageLoader = loader,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
+        } else {
+            // The whole photo is shown, never cropped.
+            AsyncImage(
+                model = m.uri,
+                imageLoader = loader,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        // Transparent layer on top that receives the swipes and the tap, since the video view would swallow them.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(m.id) {
+                    detectTapGestures {
+                        player?.let { if (it.isPlaying) it.pause() else it.start() }
+                    }
+                }
+                .pointerInput(m.id) {
+                    detectDragGestures(
+                        onDragEnd = {
+                            val o = off
+                            if (o.y < -threshold && -o.y > abs(o.x)) {
+                                state.trash(m)
+                            } else if (o.x > threshold) {
+                                state.keep(m, 0)
+                            } else if (o.x < -threshold) {
+                                off = Offset.Zero
+                                state.undo()
+                            } else {
+                                off = Offset.Zero
+                            }
+                        },
+                        onDragCancel = { off = Offset.Zero }
+                    ) { change, drag ->
+                        change.consume()
+                        off += drag
+                    }
+                }
         )
         if (m.isVideo) {
             Text(
-                "▶ فيديو",
+                "فيديو · اضغط للإيقاف",
                 color = Color.White,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
