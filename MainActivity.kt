@@ -116,6 +116,12 @@ fun canMoveTo(path: String, isVideo: Boolean): Boolean =
 
 fun canMoveAny(path: String): Boolean = canMoveTo(path, false) || canMoveTo(path, true)
 
+/** The real phone folder for an album made in the app: photos go to Pictures, videos to Movies. */
+fun folderPathFor(name: String, isVideo: Boolean): String {
+    val safe = name.replace(Regex("[\\\\/:*?\"<>|\\n]"), " ").trim().trim('.').ifEmpty { "Album" }
+    return (if (isVideo) "Movies/" else "Pictures/") + safe + "/"
+}
+
 /** All app state. Sorting decisions are saved on the device so they survive closing the app. */
 class AppState(private val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("farz", Context.MODE_PRIVATE)
@@ -189,12 +195,22 @@ class AppState(private val ctx: Context) {
             else if (id != null && p.size == 3) albums.add(Album(id, p[2], !canMoveTo(p[1], false), p[1]))
         }
         albums.sortBy { it.id }
+        // Albums made by older versions only lived inside the app: give them a real phone folder.
+        var migrated = false
+        for (i in albums.indices) {
+            val a = albums[i]
+            if (a.path == null) {
+                albums[i] = a.copy(path = folderPathFor(a.name, a.isVideo))
+                migrated = true
+            }
+        }
+        if (migrated) save()
         if (!prefs.getBoolean("init", false)) {
-            albums.add(Album(1, "المفضلة", false))
-            albums.add(Album(2, "سفر", false))
-            albums.add(Album(3, "عائلة", false))
-            albums.add(Album(4, "لقطات مميزة", true))
-            albums.add(Album(5, "ذكريات", true))
+            albums.add(Album(1, "المفضلة", false, folderPathFor("المفضلة", false)))
+            albums.add(Album(2, "سفر", false, folderPathFor("سفر", false)))
+            albums.add(Album(3, "عائلة", false, folderPathFor("عائلة", false)))
+            albums.add(Album(4, "لقطات مميزة", true, folderPathFor("لقطات مميزة", true)))
+            albums.add(Album(5, "ذكريات", true, folderPathFor("ذكريات", true)))
             save()
         }
     }
@@ -293,7 +309,7 @@ class AppState(private val ctx: Context) {
         val clean = name.replace("|", " ").replace("\n", " ").trim()
         if (clean.isEmpty() || albums.any { it.name == clean && it.isVideo == isVideo }) return
         val next = (albums.maxOfOrNull { it.id } ?: 0L) + 1
-        albums.add(Album(next, clean, isVideo))
+        albums.add(Album(next, clean, isVideo, folderPathFor(clean, isVideo)))
         save()
     }
 
